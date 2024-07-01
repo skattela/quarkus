@@ -2,12 +2,11 @@ package io.quarkus.it.jpa.postgresql;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import io.quarkus.test.LogCollectingTestResource;
-import io.quarkus.test.common.QuarkusTestResource;
 import io.quarkus.test.common.ResourceArg;
+import io.quarkus.test.common.WithTestResource;
 import io.quarkus.test.junit.QuarkusTest;
 
 /**
@@ -20,12 +19,7 @@ import io.quarkus.test.junit.QuarkusTest;
  * hence the lack of a corresponding native mode test.
  */
 @QuarkusTest
-// Temporarily ignore this test:
-// See https://hibernate.atlassian.net/browse/HHH-18112
-// See https://hibernate.zulipchat.com/#narrow/stream/132094-hibernate-orm-dev/topic/6.2E5.2E1.20in.20Quarkus
-// TODO remove this once we upgrade to ORM 6.5.2
-@Disabled
-@QuarkusTestResource(value = LogCollectingTestResource.class, restrictToAnnotatedClass = true, initArgs = {
+@WithTestResource(value = LogCollectingTestResource.class, initArgs = {
         @ResourceArg(name = LogCollectingTestResource.LEVEL, value = "WARNING"),
         @ResourceArg(name = LogCollectingTestResource.INCLUDE, value = "org\\.hibernate\\..*"),
         // Ignore logs about schema management:

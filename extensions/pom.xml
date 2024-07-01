@@ -14,8 +14,9 @@
     <name>Quarkus - Extensions - Parent pom</name>
     <packaging>pom</packaging>
     <modules>
-        <!-- Netty loom adaptor-->
         <module>virtual-threads</module>
+        <module>tls-registry</module>
+
         <!-- Plumbing -->
         <module>arc</module>
         <module>scheduler</module>
@@ -53,6 +54,8 @@
         <module>opentelemetry</module>
         <module>info</module>
         <module>observability-devservices</module>
+        <module>jfr</module>
+        <module>load-shedding</module>
 
         <!-- REST services -->
         <module>resteasy-classic</module>
@@ -226,6 +229,7 @@
                 <executions>
                     <execution>
                         <id>enforce</id>
+                        <phase>${maven-enforcer-plugin.phase}</phase>
                         <goals>
                             <goal>enforce</goal>
                         </goals>

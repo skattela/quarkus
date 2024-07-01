@@ -37,6 +37,7 @@
                 <executions>
                     <execution>
                         <id>enforce</id>
+                        <phase>${maven-enforcer-plugin.phase}</phase>
                         <goals>
                             <goal>enforce</goal>
                         </goals>
@@ -226,9 +227,11 @@
                 <module>hibernate-orm-jpamodelgen</module>
                 <module>hibernate-orm-envers</module>
                 <module>vertx-http</module>
+                <module>vertx-http-compressors</module>
                 <module>vertx-web</module>
                 <module>vertx-web-jackson</module>
                 <module>vertx</module>
+                <module>vertx-kotlin</module>
                 <module>websockets</module>
                 <module>spring-di</module>
                 <module>spring-web</module>
@@ -352,6 +355,7 @@
                 <module>opentelemetry-quickstart</module>
                 <module>opentelemetry-spi</module>
                 <module>opentelemetry-jdbc-instrumentation</module>
+                <module>opentelemetry-mongodb-client-instrumentation</module>
                 <module>opentelemetry-quartz</module>
                 <module>opentelemetry-scheduler</module>
                 <module>opentelemetry-vertx</module>
@@ -371,6 +375,9 @@
                 <module>logging-panache-kotlin</module>
                 <module>locales</module>
                 <module>redis-devservices</module>
+                <module>jfr-reactive</module>
+                <module>jfr-blocking</module>
+                <module>jfr-opentelemetry</module>
                 <!-- gRPC tests -->
                 <module>grpc-descriptor-sets</module>
                 <module>grpc-inprocess</module>

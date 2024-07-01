@@ -4,7 +4,6 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.ListIterator;
@@ -18,12 +17,12 @@ import org.jboss.logging.Logger;
 
 import io.quarkus.vertx.http.runtime.HttpConfiguration;
 import io.quarkus.websockets.next.WebSocketConnection;
+import io.quarkus.websockets.next.WebSocketsServerRuntimeConfig;
 import io.quarkus.websockets.next.runtime.ConnectionManager;
 import io.quarkus.websockets.next.runtime.ConnectionManager.ConnectionListener;
 import io.smallrye.mutiny.Multi;
 import io.smallrye.mutiny.Uni;
 import io.smallrye.mutiny.operators.multi.processors.BroadcastProcessor;
-import io.smallrye.mutiny.vertx.UniHelper;
 import io.vertx.core.Vertx;
 import io.vertx.core.http.WebSocket;
 import io.vertx.core.http.WebSocketClient;
@@ -51,12 +50,16 @@ public class WebSocketNextJsonRPCService implements ConnectionListener {
 
     private final HttpConfiguration httpConfig;
 
-    WebSocketNextJsonRPCService(ConnectionManager connectionManager, Vertx vertx, HttpConfiguration httpConfig) {
+    private final WebSocketsServerRuntimeConfig.DevMode devModeConfig;
+
+    WebSocketNextJsonRPCService(ConnectionManager connectionManager, Vertx vertx, HttpConfiguration httpConfig,
+            WebSocketsServerRuntimeConfig config) {
         this.connectionStatus = BroadcastProcessor.create();
         this.connectionMessages = BroadcastProcessor.create();
         this.connectionManager = connectionManager;
         this.vertx = vertx;
         this.httpConfig = httpConfig;
+        this.devModeConfig = config.devMode();
         this.sockets = new ConcurrentHashMap<>();
         connectionManager.addListener(this);
     }
@@ -80,6 +83,7 @@ public class WebSocketNextJsonRPCService implements ConnectionListener {
             }
             json.put(endpoint, array);
         }
+        json.put("connectionMessagesLimit", devModeConfig.connectionMessagesLimit());
         return json;
     }
 
@@ -87,8 +91,9 @@ public class WebSocketNextJsonRPCService implements ConnectionListener {
         DevWebSocket socket = sockets.get(connectionKey);
         if (socket != null) {
             JsonArray ret = new JsonArray();
-            synchronized (socket.messages) {
-                for (ListIterator<TextMessage> it = socket.messages.listIterator(socket.messages.size()); it.hasPrevious();) {
+            List<TextMessage> messages = socket.messages;
+            synchronized (messages) {
+                for (ListIterator<TextMessage> it = messages.listIterator(messages.size()); it.hasPrevious();) {
                     ret.add(it.previous().toJsonObject());
                 }
             }
@@ -104,21 +109,27 @@ public class WebSocketNextJsonRPCService implements ConnectionListener {
         }
         WebSocketClient client = vertx.createWebSocketClient();
         String connectionKey = UUID.randomUUID().toString();
-        Uni<WebSocket> uni = UniHelper.toUni(client
+        Uni<WebSocket> uni = Uni.createFrom().completionStage(() -> client
                 .connect(new WebSocketConnectOptions()
                         .setPort(httpConfig.port)
                         .setHost(httpConfig.host)
                         .setURI(path)
-                        .addHeader(DEVUI_SOCKET_KEY_HEADER, connectionKey)));
+                        .addHeader(DEVUI_SOCKET_KEY_HEADER, connectionKey))
+                .toCompletionStage());
         return uni.onItem().transform(s -> {
             LOG.debugf("Opened Dev UI connection with key %s to %s", connectionKey, path);
-            List<TextMessage> messages = Collections.synchronizedList(new ArrayList<>());
+            List<TextMessage> messages = new ArrayList<>();
             s.textMessageHandler(m -> {
-                TextMessage t = new TextMessage(true, m, LocalDateTime.now());
-                messages.add(t);
-                connectionMessages
-                        .onNext(t.toJsonObject()
-                                .put("key", connectionKey));
+                synchronized (messages) {
+                    if (messages.size() < devModeConfig.connectionMessagesLimit()) {
+                        TextMessage t = new TextMessage(true, m, LocalDateTime.now());
+                        messages.add(t);
+                        connectionMessages.onNext(t.toJsonObject().put("key", connectionKey));
+                    } else {
+                        LOG.debugf("Opened Dev UI connection [%s] received a message but the limit [%s] has been reached",
+                                connectionKey, devModeConfig.connectionMessagesLimit());
+                    }
+                }
             });
             sockets.put(connectionKey, new DevWebSocket(s, messages));
             return new JsonObject().put("success", true).put("key", connectionKey);
@@ -170,7 +181,7 @@ public class WebSocketNextJsonRPCService implements ConnectionListener {
     public Uni<JsonObject> closeDevConnection(String connectionKey) {
         DevWebSocket socket = sockets.remove(connectionKey);
         if (socket != null) {
-            Uni<Void> uni = UniHelper.toUni(socket.socket.close());
+            Uni<Void> uni = Uni.createFrom().completionStage(() -> socket.socket.close().toCompletionStage());
             return uni.onItem().transform(v -> {
                 LOG.debugf("Closed Dev UI connection with key %s", connectionKey);
                 return new JsonObject().put("success", true);
@@ -185,14 +196,20 @@ public class WebSocketNextJsonRPCService implements ConnectionListener {
     public Uni<JsonObject> sendTextMessage(String connectionKey, String message) {
         DevWebSocket socket = sockets.get(connectionKey);
         if (socket != null) {
-            Uni<Void> uni = UniHelper.toUni(socket.socket.writeTextMessage(message));
+            Uni<Void> uni = Uni.createFrom().completionStage(() -> socket.socket.writeTextMessage(message).toCompletionStage());
             return uni.onItem().transform(v -> {
-                LOG.debugf("Sent text message to connection with key %s", connectionKey);
-                TextMessage t = new TextMessage(false, message, LocalDateTime.now());
-                socket.messages.add(t);
-                connectionMessages
-                        .onNext(t.toJsonObject()
-                                .put("key", connectionKey));
+                List<TextMessage> messages = socket.messages;
+                synchronized (messages) {
+                    if (messages.size() < devModeConfig.connectionMessagesLimit()) {
+                        TextMessage t = new TextMessage(false, message, LocalDateTime.now());
+                        messages.add(t);
+                        connectionMessages.onNext(t.toJsonObject().put("key", connectionKey));
+                        LOG.debugf("Sent text message to connection with key %s", connectionKey);
+                    } else {
+                        LOG.debugf("Sent text message to connection [%s] but the limit [%s] has been reached",
+                                connectionKey, devModeConfig.connectionMessagesLimit());
+                    }
+                }
                 return new JsonObject().put("success", true);
             }).onFailure().recoverWithItem(t -> {
                 LOG.errorf(t, "Unable to send text message to connection with key %s", connectionKey);
@@ -205,7 +222,7 @@ public class WebSocketNextJsonRPCService implements ConnectionListener {
     public JsonObject clearMessages(String connectionKey) {
         DevWebSocket socket = sockets.get(connectionKey);
         if (socket != null) {
-            socket.messages.clear();
+            socket.clearMessages();
             return new JsonObject().put("success", true);
         }
         return new JsonObject().put("success", false);
@@ -240,6 +257,12 @@ public class WebSocketNextJsonRPCService implements ConnectionListener {
     }
 
     record DevWebSocket(WebSocket socket, List<TextMessage> messages) {
+
+        void clearMessages() {
+            synchronized (messages) {
+                messages.clear();
+            }
+        }
     }
 
     record TextMessage(boolean incoming, String text, LocalDateTime timestamp) {
@@ -252,6 +275,7 @@ public class WebSocketNextJsonRPCService implements ConnectionListener {
                     .put("className", incoming ? "incoming" : "outgoing")
                     .put("userAbbr", incoming ? "IN" : "OUT");
         }
+
     }
 
 }

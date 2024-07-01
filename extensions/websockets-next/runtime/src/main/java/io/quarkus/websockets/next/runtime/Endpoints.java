@@ -31,7 +31,8 @@ class Endpoints {
 
     static void initialize(Vertx vertx, ArcContainer container, Codecs codecs, WebSocketConnectionBase connection,
             WebSocketBase ws, String generatedEndpointClass, Optional<Duration> autoPingInterval,
-            SecuritySupport securitySupport, UnhandledFailureStrategy unhandledFailureStrategy, Runnable onClose) {
+            SecuritySupport securitySupport, UnhandledFailureStrategy unhandledFailureStrategy, TrafficLogger trafficLogger,
+            Runnable onClose) {
 
         Context context = vertx.getOrCreateContext();
 
@@ -113,6 +114,9 @@ class Endpoints {
         if (textBroadcastProcessor == null) {
             // Multi not consumed - invoke @OnTextMessage callback for each message received
             textMessageHandler(connection, endpoint, ws, onOpenContext, m -> {
+                if (trafficLogger != null) {
+                    trafficLogger.textMessageReceived(connection, m);
+                }
                 endpoint.onTextMessage(m).onComplete(r -> {
                     if (r.succeeded()) {
                         LOG.debugf("@OnTextMessage callback consumed text message: %s", connection);
@@ -128,6 +132,9 @@ class Endpoints {
                 contextSupport.start();
                 securitySupport.start();
                 try {
+                    if (trafficLogger != null) {
+                        trafficLogger.textMessageReceived(connection, m);
+                    }
                     textBroadcastProcessor.onNext(endpoint.decodeTextMultiItem(m));
                     LOG.debugf("Text message >> Multi: %s", connection);
                 } catch (Throwable throwable) {
@@ -144,6 +151,9 @@ class Endpoints {
         if (binaryBroadcastProcessor == null) {
             // Multi not consumed - invoke @OnBinaryMessage callback for each message received
             binaryMessageHandler(connection, endpoint, ws, onOpenContext, m -> {
+                if (trafficLogger != null) {
+                    trafficLogger.binaryMessageReceived(connection, m);
+                }
                 endpoint.onBinaryMessage(m).onComplete(r -> {
                     if (r.succeeded()) {
                         LOG.debugf("@OnBinaryMessage callback consumed binary message: %s", connection);
@@ -159,6 +169,9 @@ class Endpoints {
                 contextSupport.start();
                 securitySupport.start();
                 try {
+                    if (trafficLogger != null) {
+                        trafficLogger.binaryMessageReceived(connection, m);
+                    }
                     binaryBroadcastProcessor.onNext(endpoint.decodeBinaryMultiItem(m));
                     LOG.debugf("Binary message >> Multi: %s", connection);
                 } catch (Throwable throwable) {
@@ -198,6 +211,9 @@ class Endpoints {
         ws.closeHandler(new Handler<Void>() {
             @Override
             public void handle(Void event) {
+                if (trafficLogger != null) {
+                    trafficLogger.connectionClosed(connection);
+                }
                 ContextSupport.createNewDuplicatedContext(context, connection).runOnContext(new Handler<Void>() {
                     @Override
                     public void handle(Void event) {
@@ -208,6 +224,7 @@ class Endpoints {
                                 handleFailure(unhandledFailureStrategy, r.cause(), "Unable to complete @OnClose callback",
                                         connection);
                             }
+                            securitySupport.onClose();
                             onClose.run();
                             if (timerId != null) {
                                 vertx.cancelTimer(timerId);
@@ -244,6 +261,9 @@ class Endpoints {
     }
 
     private static void closeConnection(Throwable cause, WebSocketConnectionBase connection) {
+        if (connection.isClosed()) {
+            return;
+        }
         connection.close(CloseReason.INTERNAL_SERVER_ERROR).subscribe().with(
                 v -> LOG.debugf("Connection closed due to unhandled failure %s: %s", cause, connection),
                 t -> LOG.errorf("Unable to close connection [%s] due to unhandled failure [%s]: %s", connection.id(), cause,

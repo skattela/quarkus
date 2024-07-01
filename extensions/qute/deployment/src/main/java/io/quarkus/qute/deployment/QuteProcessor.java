@@ -753,17 +753,15 @@ public class QuteProcessor {
                     }
                 }
 
-                analysis.add(new TemplateAnalysis(null, template.getGeneratedId(), template.getExpressions(),
-                        template.getParameterDeclarations(), path.getPath(), template.getFragmentIds()));
+                analysis.add(new TemplateAnalysis(null, template, path.getPath()));
             }
         }
 
         // Message bundle templates
         for (MessageBundleMethodBuildItem messageBundleMethod : messageBundleMethods) {
             Template template = dummyEngine.parse(messageBundleMethod.getTemplate(), null, messageBundleMethod.getTemplateId());
-            analysis.add(new TemplateAnalysis(messageBundleMethod.getTemplateId(), template.getGeneratedId(),
-                    template.getExpressions(), template.getParameterDeclarations(), messageBundleMethod.getPathForAnalysis(),
-                    template.getFragmentIds()));
+            analysis.add(new TemplateAnalysis(messageBundleMethod.getTemplateId(), template,
+                    messageBundleMethod.getPathForAnalysis()));
         }
 
         LOGGER.debugf("Finished analysis of %s templates in %s ms", analysis.size(),
@@ -1001,7 +999,7 @@ public class QuteProcessor {
             // Register all param declarations as targets of implicit value resolvers
             for (ParameterDeclaration paramDeclaration : templateAnalysis.parameterDeclarations) {
                 Type type = TypeInfos.resolveTypeFromTypeInfo(paramDeclaration.getTypeInfo());
-                if (type != null) {
+                if (type != null && !implicitClassToMembersUsed.containsKey(type.name())) {
                     implicitClassToMembersUsed.put(type.name(), new HashSet<>());
                 }
             }
@@ -1500,7 +1498,8 @@ public class QuteProcessor {
             // However, this might result in confusing behavior when type-safe templates are used together with type-safe expressions.
             // But this should not be a common use case.
             ParameterDeclaration paramDeclaration = null;
-            for (ParameterDeclaration pd : templateAnalysis.getSortedParameterDeclarations()) {
+            for (ParameterDeclaration pd : TemplateAnalysis
+                    .getSortedParameterDeclarations(templateAnalysis.parameterDeclarations)) {
                 if (pd.getKey().equals(firstPartName)) {
                     paramDeclaration = pd;
                     break;
@@ -2434,6 +2433,7 @@ public class QuteProcessor {
 
         List<String> templates = new ArrayList<>();
         List<String> tags = new ArrayList<>();
+        Map<String, String> templateContents = new HashMap<>();
         for (TemplatePathBuildItem templatePath : templatePaths) {
             if (templatePath.isTag()) {
                 // tags/myTag.html -> myTag.html
@@ -2441,6 +2441,9 @@ public class QuteProcessor {
                 tags.add(tagPath.substring(TemplatePathBuildItem.TAGS.length(), tagPath.length()));
             } else {
                 templates.add(templatePath.getPath());
+            }
+            if (!templatePath.isFileBased()) {
+                templateContents.put(templatePath.getPath(), templatePath.getContent());
             }
         }
         Map<String, List<String>> variants;
@@ -2455,7 +2458,7 @@ public class QuteProcessor {
                         .map(GeneratedValueResolverBuildItem::getClassName).collect(Collectors.toList()), templates,
                         tags, variants, templateInitializers.stream()
                                 .map(TemplateGlobalProviderBuildItem::getClassName).collect(Collectors.toList()),
-                        templateRoots.getPaths().stream().map(p -> p + "/").collect(Collectors.toSet())))
+                        templateRoots.getPaths().stream().map(p -> p + "/").collect(Collectors.toSet()), templateContents))
                 .done());
     }
 
@@ -3341,10 +3344,10 @@ public class QuteProcessor {
 
     public static String getName(InjectionPointInfo injectionPoint) {
         if (injectionPoint.isField()) {
-            return injectionPoint.getTarget().asField().name();
+            return injectionPoint.getAnnotationTarget().asField().name();
         } else if (injectionPoint.isParam()) {
-            String name = injectionPoint.getTarget().asMethod().parameterName(injectionPoint.getPosition());
-            return name == null ? injectionPoint.getTarget().asMethod().name() : name;
+            String name = injectionPoint.getAnnotationTarget().asMethodParameter().name();
+            return name == null ? injectionPoint.getAnnotationTarget().asMethodParameter().method().name() : name;
         }
         throw new IllegalArgumentException();
     }
@@ -3424,8 +3427,10 @@ public class QuteProcessor {
         if (!duplicates.isEmpty()) {
             StringBuilder builder = new StringBuilder("Duplicate templates found:");
             for (Entry<String, List<TemplatePathBuildItem>> e : duplicates.entrySet()) {
-                builder.append("\n\t- ").append(e.getKey()).append(": ")
-                        .append(e.getValue().stream().map(TemplatePathBuildItem::getFullPath).collect(Collectors.toList()));
+                builder.append("\n\t- ")
+                        .append(e.getKey())
+                        .append(": ")
+                        .append(e.getValue().stream().map(TemplatePathBuildItem::getSourceInfo).collect(Collectors.toList()));
             }
             throw new IllegalStateException(builder.toString());
         }

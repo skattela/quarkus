@@ -85,6 +85,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.extension.TestInstancePostProcessor;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.mockito.Mock;
 
 import io.quarkus.arc.All;
 import io.quarkus.arc.Arc;
@@ -115,7 +116,6 @@ import io.quarkus.arc.processor.Types;
 import io.quarkus.bootstrap.classloading.QuarkusClassLoader;
 import io.quarkus.runtime.configuration.ApplicationPropertiesConfigSourceLoader;
 import io.quarkus.test.InjectMock;
-import io.smallrye.common.annotation.Experimental;
 import io.smallrye.config.ConfigMapping;
 import io.smallrye.config.ConfigMappings.ConfigClassWithPrefix;
 import io.smallrye.config.SmallRyeConfig;
@@ -161,7 +161,6 @@ import io.smallrye.config.SmallRyeConfigProviderResolver;
  * @see InjectMock
  * @see TestConfigProperty
  */
-@Experimental("This feature is experimental and the API may change in the future")
 public class QuarkusComponentTestExtension
         implements BeforeAllCallback, AfterAllCallback, BeforeEachCallback, AfterEachCallback, TestInstancePostProcessor,
         ParameterResolver {
@@ -279,6 +278,8 @@ public class QuarkusComponentTestExtension
                 // A method/param annotated with @SkipInject is never supported
                 && !parameterContext.isAnnotated(SkipInject.class)
                 && !parameterContext.getDeclaringExecutable().isAnnotationPresent(SkipInject.class)
+                // A param annotated with @org.mockito.Mock is never supported
+                && !parameterContext.isAnnotated(Mock.class)
                 // Skip params covered by built-in extensions
                 && !BUILTIN_PARAMETER.test(parameterContext.getParameter())) {
             BeanManager beanManager = Arc.container().beanManager();
@@ -498,15 +499,9 @@ public class QuarkusComponentTestExtension
     }
 
     private ClassLoader initArcContainer(ExtensionContext extensionContext, QuarkusComponentTestConfiguration configuration) {
-        Class<?> testClass = extensionContext.getRequiredTestClass();
-        // Collect all component injection points to define a bean removal exclusion
-        List<Field> injectFields = findInjectFields(testClass);
-        List<Parameter> injectParams = findInjectParams(testClass);
-
         if (configuration.componentClasses.isEmpty()) {
             throw new IllegalStateException("No component classes to test");
         }
-
         // Make sure Arc is down
         try {
             Arc.shutdown();
@@ -528,6 +523,7 @@ public class QuarkusComponentTestExtension
             throw new IllegalStateException("Failed to create index", e);
         }
 
+        Class<?> testClass = extensionContext.getRequiredTestClass();
         ClassLoader testClassClassLoader = testClass.getClassLoader();
         // The test class is loaded by the QuarkusClassLoader in continuous testing environment
         boolean isContinuousTesting = testClassClassLoader instanceof QuarkusClassLoader;
@@ -542,6 +538,10 @@ public class QuarkusComponentTestExtension
             List<DotName> qualifiers = new ArrayList<>();
             Set<String> interceptorBindings = new HashSet<>();
             AtomicReference<BeanResolver> beanResolver = new AtomicReference<>();
+
+            // Collect all @Inject and @InjectMock test class injection points to define a bean removal exclusion
+            List<Field> injectFields = findInjectFields(testClass);
+            List<Parameter> injectParams = findInjectParams(testClass);
 
             BeanProcessor.Builder builder = BeanProcessor.builder()
                     .setName(testClass.getName().replace('.', '_'))
@@ -1010,7 +1010,6 @@ public class QuarkusComponentTestExtension
         for (Method method : testMethods) {
             for (Parameter param : method.getParameters()) {
                 if (BUILTIN_PARAMETER.test(param)
-                        || param.isAnnotationPresent(InjectMock.class)
                         || param.isAnnotationPresent(SkipInject.class)) {
                     continue;
                 }
@@ -1097,18 +1096,25 @@ public class QuarkusComponentTestExtension
             } else {
                 InstanceHandle<?> handle = container.instance(requiredType, qualifiers);
                 if (field.isAnnotationPresent(Inject.class)) {
+                    if (!handle.isAvailable()) {
+                        throw new IllegalStateException(String
+                                .format("The injected field [%s] expects a real component; but no matching component was registered",
+                                        field,
+                                        handle.getBean()));
+                    }
                     if (handle.getBean().getKind() == io.quarkus.arc.InjectableBean.Kind.SYNTHETIC) {
                         throw new IllegalStateException(String
-                                .format("The injected field %s expects a real component; but obtained: %s", field,
+                                .format("The injected field [%s] expects a real component; but obtained: %s", field,
                                         handle.getBean()));
                     }
                 } else {
                     if (!handle.isAvailable()) {
                         throw new IllegalStateException(String
-                                .format("The injected field %s expects a mocked bean; but obtained null", field));
-                    } else if (handle.getBean().getKind() != io.quarkus.arc.InjectableBean.Kind.SYNTHETIC) {
+                                .format("The injected field [%s] expects a mocked bean; but obtained null", field));
+                    }
+                    if (handle.getBean().getKind() != io.quarkus.arc.InjectableBean.Kind.SYNTHETIC) {
                         throw new IllegalStateException(String
-                                .format("The injected field %s expects a mocked bean; but obtained: %s", field,
+                                .format("The injected field [%s] expects a mocked bean; but obtained: %s", field,
                                         handle.getBean()));
                     }
                 }
